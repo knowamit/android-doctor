@@ -49,7 +49,7 @@ These numbers come from `am start -W` cold launch measurements on a real device.
 ## Quick start
 
 ```bash
-git clone https://github.com/Ammroid/android-doctor.git
+git clone https://github.com/knowamit/android-doctor.git
 cd android-doctor
 
 # Connect your Android phone via USB (USB debugging must be enabled)

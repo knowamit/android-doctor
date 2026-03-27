@@ -9,7 +9,7 @@ description = "Find out why your Android phone is slow. Then fix it."
 readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.9"
-authors = [{name = "Ammroid"}]
+authors = [{name = "knowamit"}]
 keywords = ["android", "adb", "performance", "diagnostic", "debloat"]
 classifiers = [
     "Development Status :: 3 - Alpha",
@@ -26,5 +26,5 @@ classifiers = [
 android-doctor = "doctor:main"
 
 [project.urls]
-Homepage = "https://github.com/Ammroid/android-doctor"
-Issues = "https://github.com/Ammroid/android-doctor/issues"
+Homepage = "https://github.com/knowamit/android-doctor"
+Issues = "https://github.com/knowamit/android-doctor/issues"
