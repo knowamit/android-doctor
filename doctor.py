@@ -352,8 +352,11 @@ def run_benchmark():
     print(f"  CPU load:     {result.cpu_load_1:.1f}")
     print(f"  Processes:    {result.running_process_count}")
     if result.io_seq_read_mbps > 0:
-        print(f"  I/O read:     {result.io_seq_read_mbps:.0f} MB/s")
-        print(f"  I/O write:    {result.io_seq_write_mbps:.0f} MB/s")
+        print(f"  Seq read:     {result.io_seq_read_mbps:.0f} MB/s")
+        print(f"  Seq write:    {result.io_seq_write_mbps:.0f} MB/s")
+    if result.io_rand_read_iops > 0:
+        print(f"  4K rand read: {result.io_rand_read_iops:.0f} IOPS")
+        print(f"  4K rand write:{result.io_rand_write_iops:.0f} IOPS")
     print()
 
     ok_launches = [a for a in result.app_launches if a.status == "ok"]
@@ -390,6 +393,8 @@ def run_benchmark():
                 cpu_load_1=be["cpu_load_1"],
                 io_seq_read_mbps=be["io_seq_read_mbps"],
                 io_seq_write_mbps=be["io_seq_write_mbps"],
+                io_rand_read_iops=be.get("io_rand_read_iops", -1),
+                io_rand_write_iops=be.get("io_rand_write_iops", -1),
                 running_process_count=be["running_process_count"],
                 label="before",
             )

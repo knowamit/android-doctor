@@ -1,0 +1,23 @@
+# Custom bloatware list for android-doctor
+# Copy this file to ~/.android-doctor/custom_bloatware.yaml and edit it.
+#
+# Entries here are merged with the built-in bloatware database.
+# You can add packages for any OEM or create your own sections.
+#
+# Impact levels: high, medium, low
+# Categories: telemetry, ads, assistant, media, social, carrier, duplicate, other
+
+custom:
+  - package: com.example.bloatware
+    name: Example Bloatware
+    category: other
+    impact: medium
+    description: An example entry — replace with real packages
+
+# You can also extend existing OEM sections:
+# samsung:
+#   - package: com.samsung.android.some.app
+#     name: Some Samsung App
+#     category: other
+#     impact: low
+#     description: A Samsung app not in the default database

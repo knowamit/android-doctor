@@ -27,11 +27,100 @@ class BloatwareDiagnosis:
     score: int
 
 
+CUSTOM_CONFIG_PATH = os.path.expanduser("~/.android-doctor/custom_bloatware.yaml")
+CUSTOM_JSON_PATH = os.path.expanduser("~/.android-doctor/custom_bloatware.json")
+
+
 def _load_bloatware_db() -> dict:
-    """Load the bloatware database."""
+    """Load the built-in bloatware database + any user custom entries."""
     db_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "bloatware_db.json")
     with open(db_path) as f:
-        return json.load(f)
+        db = json.load(f)
+
+    # Merge custom bloatware list if it exists
+    custom = _load_custom_bloatware()
+    if custom:
+        for section, entries in custom.items():
+            if section in db:
+                # Avoid duplicates by package name
+                existing = {e["package"] for e in db[section]}
+                for entry in entries:
+                    if entry["package"] not in existing:
+                        db[section].append(entry)
+            else:
+                db[section] = entries
+
+    return db
+
+
+def _load_custom_bloatware() -> dict | None:
+    """Load user-defined custom bloatware from YAML or JSON."""
+    # Try YAML first (needs no extra deps — we parse a simple subset)
+    if os.path.exists(CUSTOM_CONFIG_PATH):
+        return _parse_simple_yaml(CUSTOM_CONFIG_PATH)
+
+    # Fallback to JSON
+    if os.path.exists(CUSTOM_JSON_PATH):
+        with open(CUSTOM_JSON_PATH) as f:
+            return json.load(f)
+
+    return None
+
+
+def _parse_simple_yaml(path: str) -> dict | None:
+    """Parse a simple YAML bloatware config without external dependencies.
+
+    Expected format:
+      custom:
+        - package: com.example.app
+          name: Example App
+          category: other
+          impact: medium
+          description: Some description
+    """
+    result: dict[str, list] = {}
+    current_section = None
+    current_entry: dict | None = None
+
+    with open(path) as f:
+        for line in f:
+            stripped = line.rstrip()
+            if not stripped or stripped.startswith("#"):
+                continue
+
+            # Section header: "custom:" or "my_oem:"
+            if not stripped.startswith(" ") and not stripped.startswith("-") and stripped.endswith(":"):
+                current_section = stripped[:-1].strip()
+                result[current_section] = []
+                continue
+
+            # List item start: "  - package: ..."
+            if "- package:" in stripped and current_section:
+                if current_entry:
+                    result[current_section].append(current_entry)
+                pkg = stripped.split("package:")[1].strip()
+                current_entry = {
+                    "package": pkg,
+                    "name": pkg,
+                    "category": "other",
+                    "impact": "medium",
+                    "description": "",
+                }
+                continue
+
+            # Key-value in current entry: "    name: Example App"
+            if current_entry and ":" in stripped:
+                key, _, val = stripped.strip().partition(":")
+                key = key.strip()
+                val = val.strip()
+                if key in ("name", "category", "impact", "description"):
+                    current_entry[key] = val
+
+        # Don't forget last entry
+        if current_entry and current_section and current_section in result:
+            result[current_section].append(current_entry)
+
+    return result if result else None
 
 
 def _detect_oem(system_packages: list[str]) -> str:

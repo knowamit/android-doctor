@@ -338,10 +338,10 @@ Zero pip dependencies. Pure Python 3.9+ standard library + ADB.
 - [x] Cache clearing (system-wide)
 - [x] HTML report export
 - [x] Full rollback system
-- [ ] Storage I/O benchmark (sequential + random 4K)
-- [ ] Per-app battery drain ranking
+- [x] Storage I/O benchmark (sequential + random 4K IOPS)
+- [x] Per-app battery drain ranking (UID-resolved package names)
+- [x] Custom bloatware lists via YAML config (`~/.android-doctor/custom_bloatware.yaml`)
 - [ ] Shizuku-based Android companion app (no PC needed)
-- [ ] Custom bloatware lists via YAML config
 
 ---
 

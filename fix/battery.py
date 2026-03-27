@@ -135,10 +135,66 @@ def grant_location_for_package(package: str, adb_path: str | None = None) -> boo
         return False
 
 
-def get_top_battery_drainers(adb_path: str | None = None) -> list[tuple[str, float]]:
-    """Get top battery-draining packages with estimated drain percentage.
+def _build_uid_to_package_map(adb_path: str | None = None) -> dict[str, str]:
+    """Build mapping from UID strings like 'u0a207' to package names."""
+    uid_map: dict[str, str] = {}
+    try:
+        raw = shell("dumpsys package --uid 2>/dev/null || pm list packages -U 2>/dev/null", adb_path=adb_path, timeout=15)
+        for line in raw.splitlines():
+            line = line.strip()
+            # Format: "package:com.example.app uid:10207"
+            if "uid:" in line.lower() and "package:" in line.lower():
+                try:
+                    pkg = line.split("package:")[1].split()[0]
+                    uid_num = int(line.split("uid:")[1].split()[0])
+                    # Android app UIDs are 10000 + app_id; "u0a207" = user 0, app 207 = uid 10207
+                    app_id = uid_num - 10000 if uid_num >= 10000 else uid_num
+                    uid_map[f"u0a{app_id}"] = pkg
+                    uid_map[str(uid_num)] = pkg
+                except (IndexError, ValueError):
+                    continue
+    except ADBError:
+        pass
 
-    Parses dumpsys batterystats for per-app power consumption.
+    # Fallback: parse pm list packages -U directly
+    if not uid_map:
+        try:
+            raw = shell("pm list packages -U", adb_path=adb_path, timeout=15)
+            for line in raw.splitlines():
+                line = line.strip()
+                # "package:com.example.app uid:10207"
+                if line.startswith("package:") and "uid:" in line:
+                    try:
+                        pkg = line.split("package:")[1].split()[0]
+                        uid_num = int(line.split("uid:")[1].strip())
+                        app_id = uid_num - 10000 if uid_num >= 10000 else uid_num
+                        uid_map[f"u0a{app_id}"] = pkg
+                        uid_map[str(uid_num)] = pkg
+                    except (IndexError, ValueError):
+                        continue
+        except ADBError:
+            pass
+
+    # Known system UIDs
+    uid_map.update({
+        "1000": "system (android.os)",
+        "0": "root (kernel)",
+        "1001": "radio (telephony)",
+        "1010": "wifi",
+        "1021": "media",
+        "1036": "log",
+        "1066": "nfc",
+        "1073": "shell",
+        "9999": "nobody",
+    })
+    return uid_map
+
+
+def get_top_battery_drainers(adb_path: str | None = None) -> list[tuple[str, float]]:
+    """Get top battery-draining packages with estimated drain in mAh.
+
+    Parses the 'Estimated power use' section from dumpsys batterystats.
+    Resolves UIDs to human-readable package names.
     """
     try:
         raw = shell(
@@ -146,37 +202,51 @@ def get_top_battery_drainers(adb_path: str | None = None) -> list[tuple[str, flo
             adb_path=adb_path,
             timeout=60,
         )
-        drainers = []
-        in_estimated = False
-        for line in raw.splitlines():
-            stripped = line.strip()
-            if "Estimated power use" in stripped:
-                in_estimated = True
-                continue
-            if in_estimated:
-                if not stripped or stripped.startswith("---"):
-                    break
-                # Format: "Uid u0a123: 45.2 ( cpu=30.1 wifi=10.2 ... ) Pkg com.example.app"
-                if "Uid" in stripped and "Pkg" in stripped:
-                    try:
-                        power_str = stripped.split(":")[1].strip().split("(")[0].strip()
-                        power = float(power_str)
-                        pkg = stripped.split("Pkg")[1].strip().split()[0]
-                        drainers.append((pkg, power))
-                    except (IndexError, ValueError):
-                        continue
-                # Simpler format: "Uid u0a123: 45.2"
-                elif "Uid" in stripped:
-                    try:
-                        power_str = stripped.split(":")[1].strip().split()[0]
-                        power = float(power_str)
-                        # No package name in this format
-                        uid = stripped.split(":")[0].strip()
-                        drainers.append((uid, power))
-                    except (IndexError, ValueError):
-                        continue
-
-        drainers.sort(key=lambda x: -x[1])
-        return drainers[:15]
     except ADBError:
         return []
+
+    # Build UID → package name map
+    uid_map = _build_uid_to_package_map(adb_path)
+
+    drainers: list[tuple[str, float]] = []
+    in_estimated = False
+
+    for line in raw.splitlines():
+        stripped = line.strip()
+        if "Estimated power use" in stripped:
+            in_estimated = True
+            continue
+        if not in_estimated:
+            continue
+        # Stop at empty line or next section
+        if not stripped:
+            break
+
+        # Skip non-UID lines (Global, Capacity, etc.)
+        if not stripped.startswith("UID"):
+            continue
+
+        # Format: "UID u0a207: 16.0 fg: 0.157 fgs: 0.624 ( cpu=0.796 ... )"
+        # Or:     "UID 1000: 71.8 fg: 0.0121 ..."
+        try:
+            # Extract UID and power
+            after_uid = stripped[4:]  # skip "UID "
+            uid_str, rest = after_uid.split(":", 1)
+            uid_str = uid_str.strip()
+
+            # Power is the first number after the colon
+            power_str = rest.strip().split()[0]
+            power = float(power_str)
+
+            if power < 0.1:
+                continue  # skip negligible entries
+
+            # Resolve UID to package name
+            name = uid_map.get(uid_str, uid_str)
+
+            drainers.append((name, power))
+        except (IndexError, ValueError):
+            continue
+
+    drainers.sort(key=lambda x: -x[1])
+    return drainers[:15]

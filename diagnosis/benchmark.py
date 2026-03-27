@@ -25,6 +25,8 @@ class BenchmarkResult:
     cpu_load_1: float
     io_seq_read_mbps: float  # -1 if unavailable
     io_seq_write_mbps: float
+    io_rand_read_iops: float  # -1 if unavailable
+    io_rand_write_iops: float
     running_process_count: int
     label: str  # "before" | "after" | "baseline" | custom
 
@@ -78,52 +80,101 @@ def measure_app_launch(package: str, activity: str, adb_path: str | None = None)
         return AppLaunchResult(package=package, activity=activity, total_time_ms=-1, status="error")
 
 
-def measure_io_speed(adb_path: str | None = None) -> tuple[float, float]:
-    """Measure sequential I/O speed. Returns (read_mbps, write_mbps)."""
-    read_mbps = -1.0
-    write_mbps = -1.0
+def _parse_dd_speed(output: str) -> float:
+    """Parse speed from dd output. Handles multiple formats:
+    - '871 M/s'  '1.2 G/s'  '500 K/s'
+    - '104857600 bytes/sec'  '104857600 B/s'
+    - '100 MB/s'
+    - '10485760 bytes (10 M) copied, 0.011 s, 871 M/s'
+    """
+    # Format: "X.X G/s"
+    match = re.search(r"(\d+(?:\.\d+)?)\s*G/s", output)
+    if match:
+        return float(match.group(1)) * 1024
+
+    # Format: "X.X M/s" or "X MB/s"
+    match = re.search(r"(\d+(?:\.\d+)?)\s*M(?:B)?/s", output)
+    if match:
+        return float(match.group(1))
+
+    # Format: "X K/s" or "X KB/s"
+    match = re.search(r"(\d+(?:\.\d+)?)\s*K(?:B)?/s", output)
+    if match:
+        return float(match.group(1)) / 1024
+
+    # Format: "X bytes/sec" or "X B/s"
+    match = re.search(r"(\d+(?:\.\d+)?)\s*(?:bytes/sec|B/s)", output)
+    if match:
+        return float(match.group(1)) / (1024 * 1024)
+
+    # Fallback: parse "X bytes ... copied, Y s" and compute
+    match = re.search(r"(\d+)\s*bytes.*copied.*?(\d+(?:\.\d+)?)\s*s", output)
+    if match:
+        nbytes = float(match.group(1))
+        secs = float(match.group(2))
+        if secs > 0:
+            return nbytes / secs / (1024 * 1024)
+
+    return -1.0
+
+
+def measure_io_speed(adb_path: str | None = None) -> tuple[float, float, float, float]:
+    """Measure I/O speed. Returns (seq_read, seq_write, rand_read_iops, rand_write_iops)."""
+    seq_read = -1.0
+    seq_write = -1.0
+    rand_read_iops = -1.0
+    rand_write_iops = -1.0
+    bench_path = "/data/local/tmp/ad_bench"
 
     try:
-        # Write test: 50MB file
+        # Sequential write: 50MB
         write_out = shell(
-            "dd if=/dev/zero of=/data/local/tmp/android_doctor_bench bs=1048576 count=50 2>&1",
+            f"dd if=/dev/zero of={bench_path} bs=1048576 count=50 conv=fsync 2>&1",
             adb_path=adb_path,
-            timeout=30,
+            timeout=60,
         )
-        # Parse: "50+0 records out ... 52428800 bytes transferred in 0.5 secs (104857600 bytes/sec)"
-        match = re.search(r"(\d+(?:\.\d+)?)\s*(?:bytes/sec|B/s)", write_out)
-        if match:
-            write_mbps = float(match.group(1)) / (1024 * 1024)
-        else:
-            # Alternative format: "X MB/s"
-            match = re.search(r"(\d+(?:\.\d+)?)\s*MB/s", write_out)
-            if match:
-                write_mbps = float(match.group(1))
+        seq_write = _parse_dd_speed(write_out)
 
-        # Read test: read back the same file
-        # Drop caches first if possible
-        shell("echo 3 > /proc/sys/vm/drop_caches 2>/dev/null", adb_path=adb_path)
-        time.sleep(0.5)
-
+        # Sequential read: read back 50MB
+        shell("sync 2>/dev/null", adb_path=adb_path)
         read_out = shell(
-            "dd if=/data/local/tmp/android_doctor_bench of=/dev/null bs=1048576 2>&1",
+            f"dd if={bench_path} of=/dev/null bs=1048576 2>&1",
             adb_path=adb_path,
-            timeout=30,
+            timeout=60,
         )
-        match = re.search(r"(\d+(?:\.\d+)?)\s*(?:bytes/sec|B/s)", read_out)
-        if match:
-            read_mbps = float(match.group(1)) / (1024 * 1024)
-        else:
-            match = re.search(r"(\d+(?:\.\d+)?)\s*MB/s", read_out)
-            if match:
-                read_mbps = float(match.group(1))
+        seq_read = _parse_dd_speed(read_out)
+
+        # Random 4K write: 1000 blocks of 4K (4MB total, random pattern)
+        rand_write_out = shell(
+            f"dd if=/dev/urandom of={bench_path}_rnd bs=4096 count=1000 conv=fsync 2>&1",
+            adb_path=adb_path,
+            timeout=60,
+        )
+        rw_speed = _parse_dd_speed(rand_write_out)
+        if rw_speed > 0:
+            # Convert MB/s to IOPS (each op is 4KB)
+            rand_write_iops = round(rw_speed * 1024 / 4, 0)
+
+        # Random 4K read: read back
+        rand_read_out = shell(
+            f"dd if={bench_path}_rnd of=/dev/null bs=4096 2>&1",
+            adb_path=adb_path,
+            timeout=60,
+        )
+        rr_speed = _parse_dd_speed(rand_read_out)
+        if rr_speed > 0:
+            rand_read_iops = round(rr_speed * 1024 / 4, 0)
 
         # Cleanup
-        shell("rm -f /data/local/tmp/android_doctor_bench", adb_path=adb_path)
+        shell(f"rm -f {bench_path} {bench_path}_rnd", adb_path=adb_path)
     except ADBError:
-        pass
+        # Cleanup on failure too
+        try:
+            shell(f"rm -f {bench_path} {bench_path}_rnd", adb_path=adb_path)
+        except ADBError:
+            pass
 
-    return (round(read_mbps, 1), round(write_mbps, 1))
+    return (round(seq_read, 1), round(seq_write, 1), rand_read_iops, rand_write_iops)
 
 
 def count_running_processes(adb_path: str | None = None) -> int:
@@ -170,9 +221,10 @@ def run_benchmark(label: str = "baseline", adb_path: str | None = None) -> Bench
 
     # I/O speed
     _status("Benchmarking storage I/O (50MB)")
-    read_mbps, write_mbps = measure_io_speed(adb_path)
+    read_mbps, write_mbps, rand_r_iops, rand_w_iops = measure_io_speed(adb_path)
     if read_mbps > 0:
-        _ok(f"R:{read_mbps:.0f} W:{write_mbps:.0f} MB/s")
+        rand_info = f" | 4K R:{rand_r_iops:.0f} W:{rand_w_iops:.0f} IOPS" if rand_r_iops > 0 else ""
+        _ok(f"Seq R:{read_mbps:.0f} W:{write_mbps:.0f} MB/s{rand_info}")
     else:
         _ok("skipped")
 
@@ -200,6 +252,8 @@ def run_benchmark(label: str = "baseline", adb_path: str | None = None) -> Bench
         cpu_load_1=load1,
         io_seq_read_mbps=read_mbps,
         io_seq_write_mbps=write_mbps,
+        io_rand_read_iops=rand_r_iops,
+        io_rand_write_iops=rand_w_iops,
         running_process_count=proc_count,
         label=label,
     )
@@ -245,8 +299,11 @@ def print_benchmark_comparison(before: BenchmarkResult, after: BenchmarkResult):
     print(f"  {'Processes:':<22} {before.running_process_count:>6}    → {after.running_process_count:>6}     {_delta(before.running_process_count, after.running_process_count, '', lower_is_better=True)}")
 
     if before.io_seq_read_mbps > 0 and after.io_seq_read_mbps > 0:
-        print(f"  {'I/O read:':<22} {before.io_seq_read_mbps:>5.0f} MB/s → {after.io_seq_read_mbps:>5.0f} MB/s {_delta(before.io_seq_read_mbps, after.io_seq_read_mbps, ' MB/s')}")
-        print(f"  {'I/O write:':<22} {before.io_seq_write_mbps:>5.0f} MB/s → {after.io_seq_write_mbps:>5.0f} MB/s {_delta(before.io_seq_write_mbps, after.io_seq_write_mbps, ' MB/s')}")
+        print(f"  {'Seq read:':<22} {before.io_seq_read_mbps:>5.0f} MB/s → {after.io_seq_read_mbps:>5.0f} MB/s {_delta(before.io_seq_read_mbps, after.io_seq_read_mbps, ' MB/s')}")
+        print(f"  {'Seq write:':<22} {before.io_seq_write_mbps:>5.0f} MB/s → {after.io_seq_write_mbps:>5.0f} MB/s {_delta(before.io_seq_write_mbps, after.io_seq_write_mbps, ' MB/s')}")
+    if before.io_rand_read_iops > 0 and after.io_rand_read_iops > 0:
+        print(f"  {'4K rand read:':<22} {before.io_rand_read_iops:>5.0f} IOPS → {after.io_rand_read_iops:>5.0f} IOPS {_delta(before.io_rand_read_iops, after.io_rand_read_iops, ' IOPS')}")
+        print(f"  {'4K rand write:':<22} {before.io_rand_write_iops:>5.0f} IOPS → {after.io_rand_write_iops:>5.0f} IOPS {_delta(before.io_rand_write_iops, after.io_rand_write_iops, ' IOPS')}")
     print()
 
     # App launch times

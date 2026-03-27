@@ -31,6 +31,8 @@ def save_benchmark(result: BenchmarkResult):
         "cpu_load_1": result.cpu_load_1,
         "io_seq_read_mbps": result.io_seq_read_mbps,
         "io_seq_write_mbps": result.io_seq_write_mbps,
+        "io_rand_read_iops": result.io_rand_read_iops,
+        "io_rand_write_iops": result.io_rand_write_iops,
         "running_process_count": result.running_process_count,
         "app_launches": [
             {
