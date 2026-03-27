@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "android-doctor"
+version = "0.1.0"
+description = "Find out why your Android phone is slow. Then fix it."
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.9"
+authors = [{name = "Ammroid"}]
+keywords = ["android", "adb", "performance", "diagnostic", "debloat"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Topic :: System :: Hardware",
+    "Topic :: Utilities",
+]
+
+[project.scripts]
+android-doctor = "doctor:main"
+
+[project.urls]
+Homepage = "https://github.com/Ammroid/android-doctor"
+Issues = "https://github.com/Ammroid/android-doctor/issues"
